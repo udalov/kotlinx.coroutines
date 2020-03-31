@@ -5,7 +5,7 @@
 apply plugin: 'org.jetbrains.kotlin.multiplatform'
 apply from: rootProject.file("gradle/compile-jvm-multiplatform.gradle")
 apply from: rootProject.file("gradle/compile-common.gradle")
-apply from: rootProject.file("gradle/compile-js-multiplatform.gradle")
+//apply from: rootProject.file("gradle/compile-js-multiplatform.gradle")
 apply from: rootProject.file("gradle/compile-native-multiplatform.gradle")
 apply from: rootProject.file('gradle/publish-npm-js.gradle')
 apply from: rootProject.file('gradle/performance.gradle')
