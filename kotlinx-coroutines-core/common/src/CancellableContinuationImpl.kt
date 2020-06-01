@@ -24,9 +24,11 @@ internal val RESUME_TOKEN = Symbol("RESUME_TOKEN")
  */
 @PublishedApi
 internal open class CancellableContinuationImpl<in T>(
-    final override val delegate: Continuation<T>,
+    delegate: Continuation<T>,
     resumeMode: Int
 ) : DispatchedTask<T>(resumeMode), CancellableContinuation<T>, CoroutineStackFrame {
+    @PublishedApi // for Kotlin/Native
+    final override val delegate: Continuation<T> = delegate.asShareable()
     public override val context: CoroutineContext = delegate.context
 
     /*
@@ -85,7 +87,9 @@ internal open class CancellableContinuationImpl<in T>(
         setupCancellation()
     }
 
-    private fun isReusable(): Boolean = delegate is DispatchedContinuation<*> && delegate.isReusable(this)
+    // todo: It is never reusable on Kotlin/Native due to architectural peculiarities
+    private fun isReusable(): Boolean =
+        delegate is DispatchedContinuation<*> && delegate.isReusable(this) && isReuseSupportedInPlatform()
 
     /**
      * Resets cancellability state in order to [suspendAtomicCancellableCoroutineReusable] to work.
@@ -113,7 +117,7 @@ internal open class CancellableContinuationImpl<in T>(
     private fun setupCancellation() {
         if (checkCompleted()) return
         if (parentHandle !== null) return // fast path 2 -- was already initialized
-        val parent = delegate.context[Job] ?: return // fast path 3 -- don't do anything without parent
+        val parent = context[Job] ?: return // fast path 3 -- don't do anything without parent
         parent.start() // make sure the parent is started
         val handle = parent.invokeOnCompletion(
             onCancelling = true,
@@ -131,6 +135,9 @@ internal open class CancellableContinuationImpl<in T>(
     private fun checkCompleted(): Boolean {
         val completed = isCompleted
         if (resumeMode != MODE_ATOMIC_DEFAULT) return completed // Do not check postponed cancellation for non-reusable continuations
+        // This check is needed in advance because we cannot check if delegate is DispatchedContinuation<*>.
+        // The stable reference could have been already disposed and we cannot even safely grab it concurrently with dispose
+        if (!isReuseSupportedInPlatform()) return completed
         val dispatched = delegate as? DispatchedContinuation<*> ?: return completed
         val cause = dispatched.checkPostponedCancellation(this) ?: return completed
         if (!completed) {
@@ -141,7 +148,7 @@ internal open class CancellableContinuationImpl<in T>(
     }
 
     public override val callerFrame: CoroutineStackFrame?
-        get() = delegate as? CoroutineStackFrame
+        get() = delegate.asLocal() as? CoroutineStackFrame
 
     public override fun getStackTraceElement(): StackTraceElement? = null
 
@@ -160,6 +167,7 @@ internal open class CancellableContinuationImpl<in T>(
      */
     private fun cancelLater(cause: Throwable): Boolean {
         if (resumeMode != MODE_ATOMIC_DEFAULT) return false
+        // On Kotlin/Native reuse is not supported, so delegate is never DispatchedContinuation and false is returned
         val dispatched = (delegate as? DispatchedContinuation<*>) ?: return false
         return dispatched.postponeCancellation(cause)
     }
@@ -179,7 +187,8 @@ internal open class CancellableContinuationImpl<in T>(
         }
     }
 
-    internal fun parentCancelled(cause: Throwable) {
+    internal fun parentCancelled(parentJob: Job) {
+        val cause = getContinuationCancellationCause(parentJob)
         if (cancelLater(cause)) return
         cancel(cause)
         // Even if cancellation has failed, we should detach child to avoid potential leak
@@ -228,6 +237,8 @@ internal open class CancellableContinuationImpl<in T>(
     internal fun getResult(): Any? {
         setupCancellation()
         if (trySuspend()) return COROUTINE_SUSPENDED
+        // When cancellation does not suspend on Kotlin/Native it shall dispose its continuation which it will not use
+        disposeContinuation { delegate }
         // otherwise, onCompletionInternal was already invoked & invoked tryResume, and the result is in the state
         val state = this.state
         if (state is CompletedExceptionally) throw recoverStackTrace(state.cause, this)
@@ -396,12 +407,12 @@ internal open class CancellableContinuationImpl<in T>(
     }
 
     override fun CoroutineDispatcher.resumeUndispatched(value: T) {
-        val dc = delegate as? DispatchedContinuation
+        val dc = delegate.asLocalOrNullIfNotUsed() as? DispatchedContinuation
         resumeImpl(value, if (dc?.dispatcher === this) MODE_UNDISPATCHED else resumeMode)
     }
 
     override fun CoroutineDispatcher.resumeUndispatchedWithException(exception: Throwable) {
-        val dc = delegate as? DispatchedContinuation
+        val dc = delegate.asLocalOrNullIfNotUsed() as? DispatchedContinuation
         resumeImpl(CompletedExceptionally(exception), if (dc?.dispatcher === this) MODE_UNDISPATCHED else resumeMode)
     }
 

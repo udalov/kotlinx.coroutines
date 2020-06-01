@@ -7,8 +7,10 @@
 
 package kotlinx.coroutines
 
+import kotlinx.coroutines.intrinsics.*
 import java.util.concurrent.locks.*
 import kotlin.coroutines.*
+import kotlin.coroutines.intrinsics.*
 
 /**
  * Runs a new coroutine and **blocks** the current thread _interruptibly_ until its completion.
@@ -33,7 +35,7 @@ import kotlin.coroutines.*
  * @param block the coroutine code.
  */
 @Throws(InterruptedException::class)
-public fun <T> runBlocking(context: CoroutineContext = EmptyCoroutineContext, block: suspend CoroutineScope.() -> T): T {
+public actual fun <T> runBlocking(context: CoroutineContext, block: suspend CoroutineScope.() -> T): T {
     val currentThread = Thread.currentThread()
     val contextInterceptor = context[ContinuationInterceptor]
     val eventLoop: EventLoop?
@@ -93,3 +95,39 @@ private class BlockingCoroutine<T>(
         return state as T
     }
 }
+
+@Suppress("NOTHING_TO_INLINE") // Save an entry on call stack
+internal actual inline fun <T, R> startCoroutine(
+    start: CoroutineStart,
+    receiver: R,
+    completion: Continuation<T>,
+    noinline block: suspend R.() -> T
+) =
+    startCoroutineImpl(start, receiver, completion, block)
+
+@Suppress("NOTHING_TO_INLINE") // Save an entry on call stack
+internal actual inline fun <T, R> startAbstractCoroutine(
+    start: CoroutineStart,
+    receiver: R,
+    coroutine: AbstractCoroutine<T>,
+    noinline block: suspend R.() -> T
+) {
+    coroutine.initParentJob()
+    startCoroutineImpl(start, receiver, coroutine, block)
+}
+
+@Suppress("NOTHING_TO_INLINE") // Save an entry on call stack
+internal actual inline fun <T, R> saveLazyCoroutine(
+    coroutine: AbstractCoroutine<T>,
+    receiver: R,
+    noinline block: suspend R.() -> T
+): Any =
+    block.createCoroutineUnintercepted(receiver, coroutine)
+
+@Suppress("NOTHING_TO_INLINE", "UNCHECKED_CAST") // Save an entry on call stack
+internal actual inline fun <T, R> startLazyCoroutine(
+    saved: Any,
+    coroutine: AbstractCoroutine<T>,
+    receiver: R
+) =
+    (saved as Continuation<Unit>).startCoroutineCancellable(coroutine)

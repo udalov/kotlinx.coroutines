@@ -5,6 +5,7 @@
 package kotlinx.coroutines.flow
 
 import kotlinx.atomicfu.*
+import kotlinx.atomicfu.locks.*
 import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.*
 import kotlinx.coroutines.flow.internal.*
@@ -86,7 +87,7 @@ import kotlin.native.concurrent.*
  * Application of [flowOn][Flow.flowOn], [conflate][Flow.conflate],
  * [buffer] with [CONFLATED][Channel.CONFLATED] or [RENDEZVOUS][Channel.RENDEZVOUS] capacity,
  * or a [distinctUntilChanged][Flow.distinctUntilChanged] operator has no effect on the state flow.
- * 
+ *
  * ### Implementation notes
  *
  * State flow implementation is optimized for memory consumption and allocation-freedom. It uses a lock to ensure
@@ -207,34 +208,64 @@ private class StateFlowSlot {
     }
 }
 
+/*
+ * Atomicfu does not support atomic<atomicArrayOfNulls<>>() but that's what we want:
+ * dynamically-sized array of atomics. To workaround that, an additional indirection layer
+ * in form of SlotsState is added
+ */
+private class SlotsState(size: Int = INITIAL_SIZE) {
+
+    private val arr: AtomicArray<StateFlowSlot?> = atomicArrayOfNulls<StateFlowSlot?>(size)
+
+    operator fun set(index: Int, value: StateFlowSlot?) {
+        arr[index].value = value
+    }
+
+    operator fun get(index: Int): StateFlowSlot? = arr[index].value
+
+    fun getOrCreateSlot(index: Int): StateFlowSlot {
+        return arr[index].value ?: StateFlowSlot().also { arr[index].value = it }
+    }
+
+    fun makePending(size: Int) {
+        for (index in 0 until size) {
+            arr[index].value?.makePending()
+        }
+    }
+}
+
 private class StateFlowImpl<T>(initialValue: Any) : SynchronizedObject(), MutableStateFlow<T>, FusibleFlow<T> {
     private val _state = atomic(initialValue) // T | NULL
-    private var sequence = 0 // serializes updates, value update is in process when sequence is odd
-    private var slots = arrayOfNulls<StateFlowSlot?>(INITIAL_SIZE)
-    private var nSlots = 0 // number of allocated (!free) slots
-    private var nextIndex = 0 // oracle for the next free slot index
+    // atomic only for K/N
+    private val sequence = atomic<Int>(0) // serializes updates, value update is in process when sequence is odd
+    private val slots = atomic(SlotsState())
+    // Only for native, see https://github.com/Kotlin/kotlinx.atomicfu/issues/149
+    private val currentSlotsSize = atomic(INITIAL_SIZE)
+    // Both atomics only on native
+    private val nSlots = atomic(0) // number of allocated (!free) slots
+    private val nextIndex = atomic(0) // oracle for the next free slot index
 
     @Suppress("UNCHECKED_CAST")
     public override var value: T
         get() = NULL.unbox(_state.value)
         set(value) {
             var curSequence = 0
-            var curSlots: Array<StateFlowSlot?> = this.slots // benign race, we will not use it
+            var curSlots: SlotsState = slots.value // benign race, we will not use it
             val newState = value ?: NULL
             synchronized(this) {
                 val oldState = _state.value
                 if (oldState == newState) return // Don't do anything if value is not changing
                 _state.value = newState
-                curSequence = sequence
+                curSequence = sequence.value
                 if (curSequence and 1 == 0) { // even sequence means quiescent state flow (no ongoing update)
                     curSequence++ // make it odd
-                    sequence = curSequence
+                    sequence.value = curSequence
                 } else {
                     // update is already in process, notify it, and return
-                    sequence = curSequence + 2 // change sequence to notify, keep it odd
+                    sequence.value = curSequence + 2 // change sequence to notify, keep it odd
                     return
                 }
-                curSlots = slots // read current reference to collectors under lock
+                curSlots = slots.value // read current reference to collectors under lock
             }
             /*
                Fire value updates outside of the lock to avoid deadlocks with unconfined coroutines
@@ -244,18 +275,16 @@ private class StateFlowImpl<T>(initialValue: Any) : SynchronizedObject(), Mutabl
              */
             while (true) {
                 // Benign race on element read from array
-                for (col in curSlots) {
-                    col?.makePending()
-                }
+                curSlots.makePending(currentSlotsSize.value)
                 // check if the value was updated again while we were updating the old one
                 synchronized(this) {
-                    if (sequence == curSequence) { // nothing changed, we are done
-                        sequence = curSequence + 1 // make sequence even again
+                    if (sequence.value == curSequence) { // nothing changed, we are done
+                        sequence.value = curSequence + 1 // make sequence even again
                         return // done
                     }
                     // reread everything for the next loop under the lock
-                    curSequence = sequence
-                    curSlots = slots
+                    curSequence = sequence.value
+                    curSlots = slots.value
                 }
             }
         }
@@ -284,25 +313,39 @@ private class StateFlowImpl<T>(initialValue: Any) : SynchronizedObject(), Mutabl
         }
     }
 
+    private fun SlotsState.copyOf(newSize: Int): SlotsState {
+        val currentSize = currentSlotsSize.value
+        val new = SlotsState(newSize)
+        for (i in 0 until currentSize) {
+            new[i] = get(i)
+        }
+        return new
+    }
+
     private fun allocateSlot(): StateFlowSlot = synchronized(this) {
-        val size = slots.size
-        if (nSlots >= size) slots = slots.copyOf(2 * size)
-        var index = nextIndex
+        val size = currentSlotsSize.value
+        if (nSlots.value >= size) {
+            val copied = slots.value.copyOf(2 * size)
+            slots.value = copied
+            currentSlotsSize.value = 2 * size
+        }
+        var index = nextIndex.value
         var slot: StateFlowSlot
         while (true) {
-            slot = slots[index] ?: StateFlowSlot().also { slots[index] = it }
+            // This field loads are required to workaround atomicfu bugs
+            slot = slots.value.getOrCreateSlot(index)
             index++
-            if (index >= slots.size) index = 0
+            if (index >= currentSlotsSize.value) index = 0
             if (slot.allocate()) break // break when found and allocated free slot
         }
-        nextIndex = index
-        nSlots++
+        nextIndex.value = index
+        nSlots.incrementAndGet()
         slot
     }
 
     private fun freeSlot(slot: StateFlowSlot): Unit = synchronized(this) {
         slot.free()
-        nSlots--
+        nSlots.decrementAndGet()
     }
 
     override fun fuse(context: CoroutineContext, capacity: Int): FusibleFlow<T> {

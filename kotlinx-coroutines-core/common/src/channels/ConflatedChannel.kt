@@ -7,7 +7,12 @@ package kotlinx.coroutines.channels
 import kotlinx.coroutines.*
 import kotlinx.coroutines.internal.*
 import kotlinx.coroutines.selects.*
+import kotlin.jvm.*
 import kotlin.native.concurrent.*
+
+@JvmField
+@SharedImmutable
+internal val EMPTY = Symbol("EMPTY")
 
 /**
  * Channel that buffers at most one element and conflates all subsequent `send` and `offer` invocations,
@@ -20,27 +25,21 @@ import kotlin.native.concurrent.*
  */
 internal open class ConflatedChannel<E> : AbstractChannel<E>() {
     protected final override val isBufferAlwaysEmpty: Boolean get() = false
-    protected final override val isBufferEmpty: Boolean get() = value === EMPTY
+    protected final override val isBufferEmpty: Boolean get() = state.value === EMPTY
     protected final override val isBufferAlwaysFull: Boolean get() = false
     protected final override val isBufferFull: Boolean get() = false
 
-    override val isEmpty: Boolean get() = lock.withLock { isEmptyImpl }
+    override val isEmpty: Boolean get() = state.withLock { isEmptyImpl }
 
-    private val lock = ReentrantLock()
-
-    private var value: Any? = EMPTY
-
-    private companion object {
-        private val EMPTY = Symbol("EMPTY")
-    }
+    private val state = ConflatedChannelState()
 
     // result is `OFFER_SUCCESS | Closed`
     protected override fun offerInternal(element: E): Any {
         var receive: ReceiveOrClosed<E>? = null
-        lock.withLock {
+        state.withLock {
             closedForSend?.let { return it }
             // if there is no element written in buffer
-            if (value === EMPTY) {
+            if (state.value === EMPTY) {
                 // check for receivers that were waiting on the empty buffer
                 loop@ while(true) {
                     receive = takeFirstReceiveOrPeekClosed() ?: break@loop // break when no receivers queued
@@ -54,7 +53,7 @@ internal open class ConflatedChannel<E> : AbstractChannel<E>() {
                     }
                 }
             }
-            value = element
+            state.value = element
             return OFFER_SUCCESS
         }
         // breaks here if offer meets receiver
@@ -65,9 +64,9 @@ internal open class ConflatedChannel<E> : AbstractChannel<E>() {
     // result is `ALREADY_SELECTED | OFFER_SUCCESS | Closed`
     protected override fun offerSelectInternal(element: E, select: SelectInstance<*>): Any {
         var receive: ReceiveOrClosed<E>? = null
-        lock.withLock {
+        state.withLock {
             closedForSend?.let { return it }
-            if (value === EMPTY) {
+            if (state.value === EMPTY) {
                 loop@ while(true) {
                     val offerOp = describeTryOffer(element)
                     val failure = select.performAtomicTrySelect(offerOp)
@@ -87,7 +86,7 @@ internal open class ConflatedChannel<E> : AbstractChannel<E>() {
             if (!select.trySelect()) {
                 return ALREADY_SELECTED
             }
-            value = element
+            state.value = element
             return OFFER_SUCCESS
         }
         // breaks here if offer meets receiver
@@ -98,10 +97,10 @@ internal open class ConflatedChannel<E> : AbstractChannel<E>() {
     // result is `E | POLL_FAILED | Closed`
     protected override fun pollInternal(): Any? {
         var result: Any? = null
-        lock.withLock {
-            if (value === EMPTY) return closedForSend ?: POLL_FAILED
-            result = value
-            value = EMPTY
+        state.withLock {
+            if (state.value === EMPTY) return closedForSend ?: POLL_FAILED
+            result = state.value
+            state.value = EMPTY
         }
         return result
     }
@@ -109,31 +108,31 @@ internal open class ConflatedChannel<E> : AbstractChannel<E>() {
     // result is `E | POLL_FAILED | Closed`
     protected override fun pollSelectInternal(select: SelectInstance<*>): Any? {
         var result: Any? = null
-        lock.withLock {
-            if (value === EMPTY) return closedForSend ?: POLL_FAILED
+        state.withLock {
+            if (state.value === EMPTY) return closedForSend ?: POLL_FAILED
             if (!select.trySelect())
                 return ALREADY_SELECTED
-            result = value
-            value = EMPTY
+            result = state.value
+            state.value = EMPTY
         }
         return result
     }
 
     protected override fun onCancelIdempotent(wasClosed: Boolean) {
         if (wasClosed) {
-            lock.withLock {
-                value = EMPTY
+            state.withLock {
+                state.value = EMPTY
             }
         }
         super.onCancelIdempotent(wasClosed)
     }
 
-    override fun enqueueReceiveInternal(receive: Receive<E>): Boolean = lock.withLock {
+    override fun enqueueReceiveInternal(receive: Receive<E>): Boolean = state.withLock {
         super.enqueueReceiveInternal(receive)
     }
 
     // ------ debug ------
 
     override val bufferDebugString: String
-        get() = "(value=$value)"
+        get() = "(value=${state.value})"
 }
