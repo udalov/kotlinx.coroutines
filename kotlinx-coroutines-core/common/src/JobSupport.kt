@@ -353,7 +353,6 @@ public open class JobSupport constructor(active: Boolean) : Job, ChildJob, Paren
         if (parent === null || parent === NonDisposableHandle) {
             return isCancellation
         }
-
         // Notify parent but don't forget to check cancellation
         return parent.childCancelled(cause) || isCancellation
     }
@@ -368,7 +367,7 @@ public open class JobSupport constructor(active: Boolean) : Job, ChildJob, Paren
                 node.invoke(cause)
             } catch (ex: Throwable) {
                 exception?.apply { addSuppressedThrowable(ex) } ?: run {
-                    exception =  CompletionHandlerException("Exception in completion handler $node for $this", ex)
+                    exception = CompletionHandlerException("Exception in completion handler $node for $this", ex)
                 }
             }
         }
@@ -453,14 +452,17 @@ public open class JobSupport constructor(active: Boolean) : Job, ChildJob, Paren
         invokeImmediately: Boolean,
         handler: CompletionHandler
     ): DisposableHandle {
-        var nodeCache: JobNode<*>? = null
+        var nodeAdded: JobNode<*>? = null
         loopOnState { state ->
             when (state) {
                 is Empty -> { // EMPTY_X state -- no completion handlers
                     if (state.isActive) {
                         // try move to SINGLE state
-                        val node = nodeCache ?: makeNode(handler, onCancelling).also { nodeCache = it }
-                        if (_state.compareAndSet(state, node)) return node
+                        val node = makeNode(handler, onCancelling)
+                        if (_state.compareAndSet(state, node)) {
+                            nodeAdded = node
+                            return node
+                        }
                     } else
                         promoteEmptyToNodeList(state) // that way we can add listener for non-active coroutine
                 }
@@ -479,8 +481,9 @@ public open class JobSupport constructor(active: Boolean) : Job, ChildJob, Paren
                                 // or we are adding a child to a coroutine that is not completing yet
                                 if (rootCause == null || handler.isHandlerOf<ChildHandleNode>() && !state.isCompleting) {
                                     // Note: add node the list while holding lock on state (make sure it cannot change)
-                                    val node = nodeCache ?: makeNode(handler, onCancelling).also { nodeCache = it }
-                                    if (!addLastAtomic(state, list, node)) return@loopOnState // retry
+                                    val node = makeNode(handler, onCancelling)
+                                    val res = addLast(state, list, node).also { nodeAdded = node }
+                                    if (!res) return@loopOnState // retry
                                     // just return node if we don't have to invoke handler (not cancelling yet)
                                     if (rootCause == null) return node
                                     // otherwise handler is invoked immediately out of the synchronized section & handle returned
@@ -490,18 +493,31 @@ public open class JobSupport constructor(active: Boolean) : Job, ChildJob, Paren
                         }
                         if (rootCause != null) {
                             // Note: attachChild uses invokeImmediately, so it gets invoked when adding to cancelled job
-                            if (invokeImmediately) handler.invokeIt(rootCause)
+                            if (invokeImmediately) {
+                                if (nodeAdded != null) {
+                                    nodeAdded!!.invoke(rootCause)
+                                } else {
+                                    handler.invokeIt(rootCause)
+                                }
+                            }
                             return handle
                         } else {
-                            val node = nodeCache ?: makeNode(handler, onCancelling).also { nodeCache = it }
-                            if (addLastAtomic(state, list, node)) return node
+                            val node = makeNode(handler, onCancelling)
+                            val res = addLast(state, list, node).also { nodeAdded = node }
+                            if (res) return node
                         }
                     }
                 }
                 else -> { // is complete
                     // :KLUDGE: We have to invoke a handler in platform-specific way via `invokeIt` extension,
                     // because we play type tricks on Kotlin/JS and handler is not necessarily a function there
-                    if (invokeImmediately) handler.invokeIt((state as? CompletedExceptionally)?.cause)
+                    if (invokeImmediately) {
+                        if (nodeAdded != null) {
+                            nodeAdded!!.invoke((state as? CompletedExceptionally)?.cause)
+                        } else {
+                            handler.invokeIt((state as? CompletedExceptionally)?.cause)
+                        }
+                    }
                     return NonDisposableHandle
                 }
             }
@@ -517,8 +533,13 @@ public open class JobSupport constructor(active: Boolean) : Job, ChildJob, Paren
                 ?: InvokeOnCompletion(this, handler)
     }
 
-    private fun addLastAtomic(expect: Any, list: NodeList, node: JobNode<*>) =
-        list.addLastIf(node) { this.state === expect }
+    private fun addLast(expectedState: Any, list: NodeList, node: JobNode<*>): Boolean {
+        list.addLast(node)
+        if (this.state === expectedState) return true
+        if (node is ChildCompletion && !node.markInvoked()) return true
+        node.dispose()
+        return false
+    }
 
     private fun promoteEmptyToNodeList(state: Empty) {
         // try to promote it to LIST state with the corresponding state
@@ -811,7 +832,7 @@ public open class JobSupport constructor(active: Boolean) : Job, ChildJob, Paren
                 }
             }
         }
-    } 
+    }
 
     /**
      * Completes this job. Used by [AbstractCoroutine.resume].
@@ -1148,9 +1169,16 @@ public open class JobSupport constructor(active: Boolean) : Job, ChildJob, Paren
         private val child: ChildHandleNode,
         private val proposedUpdate: Any?
     ) : JobNode<Job>(child.childJob) {
+        private val invoked = atomic(false)
+
+        fun markInvoked() = invoked.compareAndSet(false, true)
+
         override fun invoke(cause: Throwable?) {
-            parent.continueCompleting(state, child, proposedUpdate)
+            if (markInvoked()) {
+                parent.continueCompleting(state, child, proposedUpdate)
+            }
         }
+
         override fun toString(): String =
             "ChildCompletion[$child, $proposedUpdate]"
     }
@@ -1245,8 +1273,7 @@ public open class JobSupport constructor(active: Boolean) : Job, ChildJob, Paren
                 if (select.trySelect()) {
                     if (state is CompletedExceptionally) {
                         select.resumeSelectWithException(state.cause)
-                    }
-                    else {
+                    } else {
                         block.startCoroutineUnintercepted(state.unboxState() as T, select.completion)
                     }
                 }
@@ -1382,16 +1409,30 @@ internal class InactiveNodeList(
 private class InvokeOnCompletion(
     job: Job,
     private val handler: CompletionHandler
-) : JobNode<Job>(job)  {
-    override fun invoke(cause: Throwable?) = handler.invoke(cause)
+) : JobNode<Job>(job) {
+    private val _invoked = atomic(false)
+
+    override fun invoke(cause: Throwable?) {
+        if (_invoked.compareAndSet(false, true)) {
+            handler.invoke(cause)
+        }
+    }
+
     override fun toString() = "InvokeOnCompletion[$classSimpleName@$hexAddress]"
 }
 
 private class ResumeOnCompletion(
     job: Job,
     private val continuation: Continuation<Unit>
-) : JobNode<Job>(job)  {
-    override fun invoke(cause: Throwable?) = continuation.resume(Unit)
+) : JobNode<Job>(job) {
+    private val _invoked = atomic(false)
+
+    override fun invoke(cause: Throwable?) {
+        if (_invoked.compareAndSet(false, true)) {
+            continuation.resume(Unit)
+        }
+    }
+
     override fun toString() = "ResumeOnCompletion[$continuation]"
 }
 
@@ -1399,18 +1440,23 @@ private class ResumeAwaitOnCompletion<T>(
     job: JobSupport,
     private val continuation: CancellableContinuationImpl<T>
 ) : JobNode<JobSupport>(job) {
+    private val _invoked = atomic(false)
+
     override fun invoke(cause: Throwable?) {
-        val state = job.state
-        assert { state !is Incomplete }
-        if (state is CompletedExceptionally) {
-            // Resume with with the corresponding exception to preserve it
-            continuation.resumeWithException(state.cause)
-        } else {
-            // Resuming with value in a cancellable way (AwaitContinuation is configured for this mode).
-            @Suppress("UNCHECKED_CAST")
-            continuation.resume(state.unboxState() as T)
+        if (_invoked.compareAndSet(false, true)) {
+            val state = job.state
+            assert { state !is Incomplete }
+            if (state is CompletedExceptionally) {
+                // Resume with with the corresponding exception to preserve it
+                continuation.resumeWithException(state.cause)
+            } else {
+                // Resuming with value in a cancellable way (AwaitContinuation is configured for this mode).
+                @Suppress("UNCHECKED_CAST")
+                continuation.resume(state.unboxState() as T)
+            }
         }
     }
+
     override fun toString() = "ResumeAwaitOnCompletion[$continuation]"
 }
 
@@ -1418,7 +1464,14 @@ internal class DisposeOnCompletion(
     job: Job,
     private val handle: DisposableHandle
 ) : JobNode<Job>(job) {
-    override fun invoke(cause: Throwable?) = handle.dispose()
+    private val _invoked = atomic(false)
+
+    override fun invoke(cause: Throwable?) {
+        if (_invoked.compareAndSet(false, true)) {
+            handle.dispose()
+        }
+    }
+
     override fun toString(): String = "DisposeOnCompletion[$handle]"
 }
 
@@ -1427,10 +1480,13 @@ private class SelectJoinOnCompletion<R>(
     private val select: SelectInstance<R>,
     private val block: suspend () -> R
 ) : JobNode<JobSupport>(job) {
+    private val _invoked = atomic(false)
+
     override fun invoke(cause: Throwable?) {
-        if (select.trySelect())
+        if (_invoked.compareAndSet(false, true) && select.trySelect())
             block.startCoroutineCancellable(select.completion)
     }
+
     override fun toString(): String = "SelectJoinOnCompletion[$select]"
 }
 
@@ -1439,10 +1495,13 @@ private class SelectAwaitOnCompletion<T, R>(
     private val select: SelectInstance<R>,
     private val block: suspend (T) -> R
 ) : JobNode<JobSupport>(job) {
+    private val _invoked = atomic(false)
+
     override fun invoke(cause: Throwable?) {
-        if (select.trySelect())
+        if (_invoked.compareAndSet(false, true) && select.trySelect())
             job.selectAwaitCompletion(select, block)
     }
+
     override fun toString(): String = "SelectAwaitOnCompletion[$select]"
 }
 
@@ -1457,12 +1516,16 @@ internal abstract class JobCancellingNode<out J : Job>(job: J) : JobNode<J>(job)
 private class InvokeOnCancelling(
     job: Job,
     private val handler: CompletionHandler
-) : JobCancellingNode<Job>(job)  {
+) : JobCancellingNode<Job>(job) {
+    private val _invoked = atomic(false)
+
     // delegate handler shall be invoked at most once, so here is an additional flag
-    private val _invoked = atomic(0) // todo: replace with atomic boolean after migration to recent atomicFu
     override fun invoke(cause: Throwable?) {
-        if (_invoked.compareAndSet(0, 1)) handler.invoke(cause)
+        if (_invoked.compareAndSet(false, true)) {
+            handler.invoke(cause)
+        }
     }
+
     override fun toString() = "InvokeOnCancelling[$classSimpleName@$hexAddress]"
 }
 
@@ -1470,9 +1533,16 @@ internal class ChildHandleNode(
     parent: JobSupport,
     @JvmField val childJob: ChildJob
 ) : JobCancellingNode<JobSupport>(parent), ChildHandle {
-    override fun invoke(cause: Throwable?) = childJob.parentCancelled(job)
+    private val _invoked = atomic(false)
+
+    override fun invoke(cause: Throwable?) {
+        if (_invoked.compareAndSet(false, true)) {
+            childJob.parentCancelled(job)
+        }
+    }
+
     override fun childCancelled(cause: Throwable): Boolean = job.childCancelled(cause)
-    override fun toString(): String = "ChildHandle[$childJob]"
+    override fun toString(): String =  "ChildHandle[$childJob]"
 }
 
 // Same as ChildHandleNode, but for cancellable continuation
@@ -1480,10 +1550,14 @@ internal class ChildContinuation(
     parent: Job,
     @JvmField val child: CancellableContinuationImpl<*>
 ) : JobCancellingNode<Job>(parent) {
+    private val _invoked = atomic(false)
+
     override fun invoke(cause: Throwable?) {
-        child.parentCancelled(child.getContinuationCancellationCause(job))
+        if (_invoked.compareAndSet(false, true)) {
+            child.parentCancelled(child.getContinuationCancellationCause(job))
+        }
     }
+
     override fun toString(): String =
         "ChildContinuation[$child]"
 }
-
