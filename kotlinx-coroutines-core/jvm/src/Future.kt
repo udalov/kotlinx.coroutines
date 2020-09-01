@@ -39,7 +39,7 @@ private class CancelFutureOnCompletion(
     override fun invoke(cause: Throwable?) {
         // Don't interrupt when cancelling future on completion, because no one is going to reset this
         // interruption flag and it will cause spurious failures elsewhere
-        future.cancel(false)
+        if (markInvoked()) future.cancel(false)
     }
     override fun toString() = "CancelFutureOnCompletion[$future]"
 }
