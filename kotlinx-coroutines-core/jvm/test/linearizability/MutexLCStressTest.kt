@@ -6,11 +6,10 @@ package kotlinx.coroutines.linearizability
 
 import kotlinx.coroutines.*
 import kotlinx.coroutines.sync.*
+import org.jetbrains.kotlinx.lincheck.*
 import org.jetbrains.kotlinx.lincheck.annotations.Operation
-import org.jetbrains.kotlinx.lincheck.verifier.*
-import org.junit.*
 
-class MutexLCStressTest : VerifierState() {
+class MutexLincheckTest : AbstractLincheckTest() {
     private val mutex = Mutex()
 
     @Operation
@@ -22,10 +21,8 @@ class MutexLCStressTest : VerifierState() {
     @Operation(handleExceptionsAsResult = [IllegalStateException::class])
     fun unlock() = mutex.unlock()
 
-    @Test
-    fun test() = LCStressOptionsDefault()
-        .actorsBefore(0)
-        .check(this::class)
+    override fun <O : Options<O, *>> O.customize(isStressTest: Boolean): O =
+        actorsBefore(0)
 
     override fun extractState() = mutex.isLocked
 }

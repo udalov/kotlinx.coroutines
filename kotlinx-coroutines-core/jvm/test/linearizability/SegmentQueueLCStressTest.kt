@@ -10,11 +10,9 @@ import kotlinx.coroutines.internal.SegmentBasedQueue
 import org.jetbrains.kotlinx.lincheck.annotations.*
 import org.jetbrains.kotlinx.lincheck.annotations.Operation
 import org.jetbrains.kotlinx.lincheck.paramgen.*
-import org.jetbrains.kotlinx.lincheck.verifier.*
-import org.junit.*
 
 @Param(name = "value", gen = IntGen::class, conf = "1:5")
-class SegmentQueueLCStressTest : VerifierState() {
+class SegmentQueueLincheckTest : AbstractLincheckTest() {
     private val q = SegmentBasedQueue<Int>()
 
     @Operation
@@ -39,7 +37,4 @@ class SegmentQueueLCStressTest : VerifierState() {
         val closed = q.enqueue(0) === null
         return elements to closed
     }
-
-    @Test
-    fun test() = LCStressOptionsDefault().check(this::class)
 }

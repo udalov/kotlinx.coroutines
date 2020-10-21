@@ -7,15 +7,14 @@ package kotlinx.coroutines.linearizability
 
 import kotlinx.coroutines.*
 import kotlinx.coroutines.internal.*
+import org.jetbrains.kotlinx.lincheck.*
 import org.jetbrains.kotlinx.lincheck.annotations.*
 import org.jetbrains.kotlinx.lincheck.annotations.Operation
 import org.jetbrains.kotlinx.lincheck.paramgen.*
-import org.jetbrains.kotlinx.lincheck.verifier.*
 import org.jetbrains.kotlinx.lincheck.verifier.quiescent.*
-import kotlin.test.*
 
 @Param(name = "value", gen = IntGen::class, conf = "1:3")
-internal abstract class AbstractLockFreeTaskQueueWithoutRemoveLCStressTest protected constructor(singleConsumer: Boolean) : VerifierState() {
+internal abstract class AbstractLockFreeTaskQueueWithoutRemoveLincheckTest protected constructor(singleConsumer: Boolean) : AbstractLincheckTest() {
     @JvmField
     protected val q = LockFreeTaskQueue<Int>(singleConsumer = singleConsumer)
 
@@ -29,16 +28,14 @@ internal abstract class AbstractLockFreeTaskQueueWithoutRemoveLCStressTest prote
     @Operation(group = "consumer")
     fun removeFirstOrNull() = q.removeFirstOrNull()
 
-    override fun extractState() = q.map { it } to q.isClosed()
+    override fun <O : Options<O, *>> O.customize(isStressTest: Boolean): O =
+        verifier(QuiescentConsistencyVerifier::class.java)
 
-    @Test
-    fun testWithRemoveForQuiescentConsistency() = LCStressOptionsDefault()
-        .verifier(QuiescentConsistencyVerifier::class.java)
-        .check(this::class)
+    override fun extractState() = q.map { it } to q.isClosed()
 }
 
 @OpGroupConfig(name = "consumer", nonParallel = false)
-internal class MCLockFreeTaskQueueWithRemoveLCStressTest : AbstractLockFreeTaskQueueWithoutRemoveLCStressTest(singleConsumer = false)
+internal class MCLockFreeTaskQueueWithRemoveLincheckTest : AbstractLockFreeTaskQueueWithoutRemoveLincheckTest(singleConsumer = false)
 
 @OpGroupConfig(name = "consumer", nonParallel = true)
-internal class SCLockFreeTaskQueueWithRemoveLCStressTest : AbstractLockFreeTaskQueueWithoutRemoveLCStressTest(singleConsumer = true)
+internal class SCLockFreeTaskQueueWithRemoveLincheckTest : AbstractLockFreeTaskQueueWithoutRemoveLincheckTest(singleConsumer = true)

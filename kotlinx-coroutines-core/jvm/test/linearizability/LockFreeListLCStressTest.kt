@@ -10,11 +10,9 @@ import kotlinx.coroutines.internal.*
 import org.jetbrains.kotlinx.lincheck.annotations.*
 import org.jetbrains.kotlinx.lincheck.annotations.Operation
 import org.jetbrains.kotlinx.lincheck.paramgen.*
-import org.jetbrains.kotlinx.lincheck.verifier.*
-import kotlin.test.*
 
 @Param(name = "value", gen = IntGen::class, conf = "1:5")
-class LockFreeListLCStressTest : VerifierState() {
+class LockFreeListLincheckTest : AbstractLincheckTest() {
     class Node(val value: Int): LockFreeLinkedListNode()
 
     private val q: LockFreeLinkedListHead = LockFreeLinkedListHead()
@@ -42,9 +40,6 @@ class LockFreeListLCStressTest : VerifierState() {
     }
 
     private fun Any.isSame(value: Int) = this is Node && this.value == value
-
-    @Test
-    fun testAddRemoveLinearizability() = LCStressOptionsDefault().check(this::class)
 
     override fun extractState(): Any {
         val elements = ArrayList<Int>()
