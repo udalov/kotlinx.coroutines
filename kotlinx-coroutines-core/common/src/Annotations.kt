@@ -64,3 +64,12 @@ public annotation class ObsoleteCoroutinesApi
             "so stable API could be provided instead"
 )
 public annotation class InternalCoroutinesApi
+
+@MustBeDocumented
+@Retention(value = AnnotationRetention.BINARY)
+@RequiresOptIn(
+    level = RequiresOptIn.Level.ERROR,
+    message = "TODO"
+)
+@Target(AnnotationTarget.FUNCTION, AnnotationTarget.PROPERTY)
+public annotation class HazardousConcurrentApi
