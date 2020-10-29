@@ -21,6 +21,9 @@ repositories {
         maven("https://dl.bintray.com/kotlin/kotlin-eap")
         maven("https://dl.bintray.com/kotlin/kotlin-dev")
     }
+    properties["kotlinCompilerRepo"]?.let {
+        maven(it.toString())
+    }
 
     if (buildSnapshotTrain) {
         mavenLocal()
