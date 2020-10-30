@@ -8,15 +8,60 @@ import kotlinx.atomicfu.*
 import kotlinx.coroutines.*
 import kotlinx.coroutines.internal.SegmentQueueSynchronizer
 
+/**
+ * A readers-writer mutex maintains a logical pair of locks, one for
+ * read-only operations, that can be processed concurrently, and one
+ * for write operations which guarantees an exclusive access so that
+ * neither write or read operation can be processed in parallel.
+ *
+ * Similarly to [Mutex], this readers-writer mutex is  **non-reentrant**,
+ * that is invoking [readLock] or [writeLock] even from the same thread or
+ * coroutine that currently holds the corresponding lock still suspends the invoker.
+ * At the same time, invoking [readLock] from the holder of the write lock
+ * also suspends the invoker.
+ *
+ * The typical usage of [ReadWriteMutex] is wrapping each read invocation with
+ * [ReadWriteMutex.withReadLock] and each write invocation with [ReadWriteMutex.withWriteLock]
+ * correspondingly. These wrapper functions guarantee that the mutex is used
+ * correctly and safely. However, one can use `lock` and `unlock` operations directly,
+ * but there is a contract that `unlock` should be invoked only after a successful
+ * corresponding `lock` invocation. Since this low-level API is potentially error-prone,
+ * it is marked as [HazardousConcurrentApi] and requires the corresponding [OptIn] declaration.
+ *
+ * The advantage of using [ReadWriteMutex] comparing to plain [Mutex] is an
+ * availability to parallelize read operations and, therefore, increasing the
+ * level of concurrency. It is extremely useful for the workloads with dominating
+ * read operations so that they can be executed in parallel and improve the
+ * performance. However, depending on the updates frequence, the execution cost of
+ * read and write operations, and the contention, it can be cheaper to use a plain [Mutex].
+ * Therefore, it is highly recommended to measure the performance difference
+ * to make a right choice.
+ */
 public interface ReadWriteMutex {
     /**
-     * TODO
+     * Acquires a read lock of this mutex if the write lock is not acquired,
+     * suspends the caller otherwise until the write lock is released. TODO fairness
+     *
+     * This suspending function is cancellable. If the [Job] of the current coroutine is cancelled or completed while this
+     * function is suspended, this function immediately resumes with [CancellationException].
+     * There is a **prompt cancellation guarantee**. If the job was cancelled while this function was
+     * suspended, it will not resume successfully. See [suspendCancellableCoroutine] documentation for low-level details.
+     * This function releases the lock if it was already acquired by this function before the [CancellationException]
+     * was thrown.
+     *
+     * Note that this function does not check for cancellation when it is not suspended.
+     * Use [yield] or [CoroutineScope.isActive] to periodically check for cancellation in tight loops if needed.
+     *
+     * TODO HazardousConcurrentApi
      */
     @HazardousConcurrentApi
     public suspend fun readLock()
 
     /**
-     * TODO
+     * Releases a read lock of this mutex and resumes the first waiting writer
+     * if there is the one and this operation releases the last read lock.
+     *
+     * TODO HazardousConcurrentApi
      */
     @HazardousConcurrentApi
     public fun readUnlock()
@@ -37,11 +82,15 @@ public interface ReadWriteMutex {
 /**
  * Creates a new [ReadWriteMutex] instance,
  * both read and write locks are not acquired.
+ *
+ * TODO: fairness
  */
 public fun ReadWriteMutex(): ReadWriteMutex = ReadWriteMutexImpl()
 
 /**
+ * Executes the given [action] under a _read_ mutex's lock.
  *
+ * @return the return value of the [action].
  */
 @OptIn(HazardousConcurrentApi::class)
 public suspend inline fun <T> ReadWriteMutex.withReadLock(action: () -> T): T {
@@ -54,7 +103,9 @@ public suspend inline fun <T> ReadWriteMutex.withReadLock(action: () -> T): T {
 }
 
 /**
+ * Executes the given [action] under the _write_ mutex's lock.
  *
+ * @return the return value of the [action].
  */
 @OptIn(HazardousConcurrentApi::class)
 public suspend inline fun <T> ReadWriteMutex.withWriteLock(action: () -> T): T {
@@ -102,7 +153,7 @@ public suspend inline fun <T> ReadWriteMutex.withWriteLock(action: () -> T): T {
  *                             and resume it.
  *
  */
-internal class ReadWriteMutexImpl : ReadWriteMutex {
+private class ReadWriteMutexImpl : ReadWriteMutex {
     private val R = atomic(0L)
     private val W = atomic(0)
 
@@ -141,7 +192,7 @@ internal class ReadWriteMutexImpl : ReadWriteMutex {
                         val wlrp = w.wlrp
                         val wrf = w.wrf
                         assert { wlrp } // WLRP flag should still be set
-                        assert { wla } // WLA cannot be set here
+                        assert { !wla } // WLA cannot be set here
                         if (wrf) {
                             // Are we the last waiting writer?
                             if (ww == 1) {
@@ -491,7 +542,7 @@ internal class ReadWriteMutexImpl : ReadWriteMutex {
             if (resume && ww == 0) {
                 val updW = constructW(0, true, false, false)
                 if (!W.compareAndSet(w, updW)) continue
-                readUnlock()
+                writeUnlock()
                 return
             } else {
                 val updW = constructW(if (resume) ww - 1 else ww, resume, false, false)

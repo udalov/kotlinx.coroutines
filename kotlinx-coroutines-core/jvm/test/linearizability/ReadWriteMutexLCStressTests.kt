@@ -68,13 +68,13 @@ class ReadWriteMutexLCStressTest {
     private val writeLockAcquired = BooleanArray(6)
 
     @Operation(cancellableOnSuspension = true, allowExtraSuspension = true)
-    suspend fun acquireRead(@Param(gen = ThreadIdGen::class) threadId: Int) {
+    suspend fun readLock(@Param(gen = ThreadIdGen::class) threadId: Int) {
         m.readLock()
         readLockAcquired[threadId]++
     }
 
     @Operation
-    fun releaseRead(@Param(gen = ThreadIdGen::class) threadId: Int): Boolean {
+    fun readUnlock(@Param(gen = ThreadIdGen::class) threadId: Int): Boolean {
         if (readLockAcquired[threadId] == 0) return false
         m.readUnlock()
         readLockAcquired[threadId]--
@@ -82,14 +82,14 @@ class ReadWriteMutexLCStressTest {
     }
 
     @Operation(cancellableOnSuspension = true, allowExtraSuspension = true)
-    suspend fun acquireWrite(@Param(gen = ThreadIdGen::class) threadId: Int) {
+    suspend fun writeLock(@Param(gen = ThreadIdGen::class) threadId: Int) {
         m.writeLock()
         assert(!writeLockAcquired[threadId]) { "The mutex is not reentrant" }
         writeLockAcquired[threadId] = true
     }
 
     @Operation
-    fun releaseWrite(@Param(gen = ThreadIdGen::class) threadId: Int): Boolean {
+    fun writeUnlock(@Param(gen = ThreadIdGen::class) threadId: Int): Boolean {
         if (!writeLockAcquired[threadId]) return false
         m.writeUnlock()
         writeLockAcquired[threadId] = false
@@ -112,15 +112,15 @@ class ReadWriteMutexLCStressTest {
         .iterations(50)
         .actorsBefore(0)
         .actorsAfter(0)
-        .threads(3)
+        .threads(2)
         .actorsPerThread(3)
         .logLevel(LoggingLevel.INFO)
-        .invocationsPerIteration(500_000)
+        .invocationsPerIteration(100_000)
         .sequentialSpecification(ReadWriteMutexSequential::class.java)
         .check(this::class)
 
-//    @StateRepresentation
-//    fun stateRepresentation() = m.toString()
+    @StateRepresentation
+    fun stateRepresentation() = m.toString()
 }
 
 class ReadWriteMutexSequential : VerifierState() {

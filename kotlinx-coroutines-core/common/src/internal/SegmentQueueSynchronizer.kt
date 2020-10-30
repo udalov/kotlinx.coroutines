@@ -326,7 +326,7 @@ internal abstract class SegmentQueueSynchronizer<T : Any> {
                     return TRY_RESUME_FAIL_CANCELLED
                 }
                 // Should the current `resume` be refused
-                // by this `SegmentQueueSynchronizer`?
+                // by this  `SegmentQueueSynchronizer`?
                 cellState === REFUSE -> {
                     // This state should not occur
                     // in the simple cancellation mode.
@@ -339,9 +339,10 @@ internal abstract class SegmentQueueSynchronizer<T : Any> {
                 // Does the cell store a cancellable continuation?
                 cellState is CancellableContinuation<*> -> {
                     // Try to resume the continuation.
-                    val success = (cellState as CancellableContinuation<T>).tryResume0(value, { returnValue(value) })
+                    val token = (cellState as CancellableContinuation<T>).tryResume(value, null, { returnValue(value) })
                     // Is the resumption successful?
-                    if (success) {
+                    if (token != null) {
+                        cellState.completeResume(token)
                         // Mark the cell as `DONE` to avoid
                         // memory leaks and complete successfully.
                         segment.set(i, RESUMED)
