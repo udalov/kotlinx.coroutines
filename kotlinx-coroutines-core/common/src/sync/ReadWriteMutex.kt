@@ -165,7 +165,10 @@ private class ReadWriteMutexImpl : ReadWriteMutex {
             // Decrement the number of waiting writers
             while (true) {
                 val w = curW
-                if (w.ww == 0) return false
+                if (w.ww == 0) {
+                    refuseNext()
+                    return true
+                }
                 if (w.ww > 1 || w.wla || w.wlrp) {
                     if (casW(w, constructW(w.ww - 1, w.wla, w.wlrp, w.wrf))) return true
                 } else {
