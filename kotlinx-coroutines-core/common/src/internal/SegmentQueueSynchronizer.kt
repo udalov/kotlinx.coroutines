@@ -176,7 +176,9 @@ internal abstract class SegmentQueueSynchronizer<T : Any> {
     }
 
     fun refuseNext() {
-        check(cancellationMode == SMART_SYNC || cancellationMode == SMART_SYNC)
+        check(cancellationMode == SMART_SYNC || cancellationMode == SMART_ASYNC) {
+            "refuseNext works only with smart cancellation, but $cancellationMode has been detected"
+        }
         // Increment `enqIdx` and find the segment
         // with the corresponding id. It is guaranteed
         // that this segment is not removed since at
