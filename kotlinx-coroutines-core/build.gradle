@@ -210,7 +210,7 @@ task jvmLincheckTest(type: Test, dependsOn: compileTestKotlinJvm) {
     classpath = files { jvmTest.classpath }
     testClassesDirs = files { jvmTest.testClassesDirs }
     minHeapSize = '1g'
-    maxHeapSize = '10g' // we may need more space for building an interleaving tree in the model checking mode
+    maxHeapSize = '6g' // we may need more space for building an interleaving tree in the model checking mode
     include '**/*LincheckTest.*'
     enableAssertions = true
     testLogging.showStandardStreams = true
