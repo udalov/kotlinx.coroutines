@@ -10,6 +10,7 @@ import kotlinx.coroutines.internal.*
 import org.jetbrains.kotlinx.lincheck.annotations.*
 import org.jetbrains.kotlinx.lincheck.annotations.Operation
 import org.jetbrains.kotlinx.lincheck.paramgen.*
+import org.jetbrains.kotlinx.lincheck.strategy.managed.modelchecking.*
 
 @Param(name = "value", gen = IntGen::class, conf = "1:5")
 class LockFreeListLincheckTest : AbstractLincheckTest() {
@@ -46,4 +47,7 @@ class LockFreeListLincheckTest : AbstractLincheckTest() {
         q.forEach<Node> { elements.add(it.value) }
         return elements
     }
+
+    override fun ModelCheckingOptions.customize(isStressTest: Boolean) =
+        checkObstructionFreedom()
 }

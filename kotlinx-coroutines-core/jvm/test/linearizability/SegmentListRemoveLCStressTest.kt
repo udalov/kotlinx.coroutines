@@ -11,6 +11,7 @@ import kotlinx.coroutines.internal.*
 import org.jetbrains.kotlinx.lincheck.*
 import org.jetbrains.kotlinx.lincheck.annotations.*
 import org.jetbrains.kotlinx.lincheck.paramgen.*
+import org.jetbrains.kotlinx.lincheck.strategy.managed.modelchecking.*
 
 class SegmentListRemoveLincheckTest : AbstractLincheckTest() {
     private val q = SegmentBasedQueue<Int>()
@@ -36,4 +37,7 @@ class SegmentListRemoveLincheckTest : AbstractLincheckTest() {
         q.checkHeadPrevIsCleaned()
         q.checkAllSegmentsAreNotLogicallyRemoved()
     }
+
+    override fun ModelCheckingOptions.customize(isStressTest: Boolean) =
+        checkObstructionFreedom()
 }

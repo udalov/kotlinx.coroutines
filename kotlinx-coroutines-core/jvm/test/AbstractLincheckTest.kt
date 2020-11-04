@@ -11,12 +11,15 @@ import org.junit.*
 
 abstract class AbstractLincheckTest : VerifierState() {
     open fun <O: Options<O, *>> O.customize(isStressTest: Boolean): O = this
+    open fun ModelCheckingOptions.customize(isStressTest: Boolean): ModelCheckingOptions = this
+    open fun StressOptions.customize(isStressTest: Boolean): StressOptions = this
 
     @Test
     fun modelCheckingTest() = ModelCheckingOptions()
         .iterations(if (isStressTest) 100 else 20)
         .invocationsPerIteration(if (isStressTest) 10_000 else 1_000)
         .commonConfiguration()
+        .customize(isStressTest)
         .check(this::class)
 
     @Test
@@ -24,6 +27,7 @@ abstract class AbstractLincheckTest : VerifierState() {
         .iterations(if (isStressTest) 100 else 20)
         .invocationsPerIteration(if (isStressTest) 10_000 else 1_000)
         .commonConfiguration()
+        .customize(isStressTest)
         .check(this::class)
 
     private fun <O : Options<O, *>> O.commonConfiguration(): O = this

@@ -10,6 +10,7 @@ import kotlinx.coroutines.internal.SegmentBasedQueue
 import org.jetbrains.kotlinx.lincheck.annotations.*
 import org.jetbrains.kotlinx.lincheck.annotations.Operation
 import org.jetbrains.kotlinx.lincheck.paramgen.*
+import org.jetbrains.kotlinx.lincheck.strategy.managed.modelchecking.*
 
 @Param(name = "value", gen = IntGen::class, conf = "1:5")
 class SegmentQueueLincheckTest : AbstractLincheckTest() {
@@ -37,4 +38,7 @@ class SegmentQueueLincheckTest : AbstractLincheckTest() {
         val closed = q.enqueue(0) === null
         return elements to closed
     }
+
+    override fun ModelCheckingOptions.customize(isStressTest: Boolean) =
+        checkObstructionFreedom()
 }
