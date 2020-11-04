@@ -183,6 +183,11 @@ jvmTest {
         exclude '**/*LincheckTest.*'
         exclude '**/*StressTest.*'
     }
+    if (Idea.active) {
+        // Configure IDEA runner for Lincheck tests
+        jvmArgs = ['--add-opens', 'java.base/jdk.internal.misc=ALL-UNNAMED',   // required for transformation
+                   '--add-exports', 'java.base/jdk.internal.util=ALL-UNNAMED'] // in the model checking mode
+    }
     systemProperty 'kotlinx.coroutines.scheduler.keep.alive.sec', '100000' // any unpark problem hangs test
 }
 
