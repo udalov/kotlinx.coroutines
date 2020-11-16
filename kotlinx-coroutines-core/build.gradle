@@ -177,6 +177,7 @@ jvmTest {
     minHeapSize = '1g'
     maxHeapSize = '1g'
     enableAssertions = true
+    // TODO we cannot pass custom system props (see the rest of `jvmTest`) because of this
     systemProperty 'java.security.manager', 'kotlinx.coroutines.TestSecurityManager'
     // 'stress' is required to be able to run all subpackage tests like ":jvmTests --tests "*channels*" -Pstress=true"
     if (!Idea.active && rootProject.properties['stress'] == null) {

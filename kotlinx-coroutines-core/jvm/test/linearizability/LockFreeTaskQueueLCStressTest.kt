@@ -27,21 +27,24 @@ internal abstract class AbstractLockFreeTaskQueueWithoutRemoveLincheckTest(
     @Operation
     fun addLast(@Param(name = "value") value: Int) = q.addLast(value)
 
-    @QuiescentConsistent
-    @Operation(group = "consumer")
-    fun removeFirstOrNull() = q.removeFirstOrNull()
-
     override fun <O : Options<O, *>> O.customize(isStressTest: Boolean): O =
         verifier(QuiescentConsistencyVerifier::class.java)
 
     override fun extractState() = q.map { it } to q.isClosed()
 
     override fun ModelCheckingOptions.customize(isStressTest: Boolean) =
-        checkObstructionFreedom(singleConsumer)
+        checkObstructionFreedom()
 }
 
-@OpGroupConfig(name = "consumer", nonParallel = false)
-internal class MCLockFreeTaskQueueWithRemoveLincheckTest : AbstractLockFreeTaskQueueWithoutRemoveLincheckTest(singleConsumer = false)
+internal class MCLockFreeTaskQueueWithRemoveLincheckTest : AbstractLockFreeTaskQueueWithoutRemoveLincheckTest(singleConsumer = false) {
+    @QuiescentConsistent
+    @Operation(blocking = true)
+    fun removeFirstOrNull() = q.removeFirstOrNull()
+}
 
 @OpGroupConfig(name = "consumer", nonParallel = true)
-internal class SCLockFreeTaskQueueWithRemoveLincheckTest : AbstractLockFreeTaskQueueWithoutRemoveLincheckTest(singleConsumer = true)
+internal class SCLockFreeTaskQueueWithRemoveLincheckTest : AbstractLockFreeTaskQueueWithoutRemoveLincheckTest(singleConsumer = true) {
+    @QuiescentConsistent
+    @Operation(group = "consumer")
+    fun removeFirstOrNull() = q.removeFirstOrNull()
+}

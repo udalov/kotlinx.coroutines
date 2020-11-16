@@ -99,7 +99,7 @@ abstract class ChannelLincheckTestBase(
         e.testResult
     }
 
-    @Operation
+    @Operation(causesBlocking = true)
     fun close(@Param(name = "closeToken") token: Int): Boolean = c.close(NumberedCancellationException(token))
 
     // TODO: this operation should be (and can be!) linearizable, but is not
