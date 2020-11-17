@@ -16,7 +16,7 @@ class MutexLincheckTest : AbstractLincheckTest() {
     @Operation
     fun tryLock() = mutex.tryLock()
 
-    @Operation
+    @Operation(promptCancellation = true)
     suspend fun lock() = mutex.lock()
 
     @Operation(handleExceptionsAsResult = [IllegalStateException::class])

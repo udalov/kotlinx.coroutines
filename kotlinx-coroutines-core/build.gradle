@@ -177,21 +177,26 @@ jvmTest {
     minHeapSize = '1g'
     maxHeapSize = '1g'
     enableAssertions = true
-    // TODO we cannot pass custom system props (see the rest of `jvmTest`) because of this
-    systemProperty 'java.security.manager', 'kotlinx.coroutines.TestSecurityManager'
+    if (!Idea.active) {
+        // We should not set this security manager when `jvmTest`
+        // is invoked by IntelliJ IDEA since we need to pass
+        // system properties for Lincheck and stress tests.
+        systemProperty 'java.security.manager', 'kotlinx.coroutines.TestSecurityManager'
+    }
     // 'stress' is required to be able to run all subpackage tests like ":jvmTests --tests "*channels*" -Pstress=true"
     if (!Idea.active && rootProject.properties['stress'] == null) {
         exclude '**/*LincheckTest.*'
         exclude '**/*StressTest.*'
     }
     if (Idea.active) {
-        // Configure IDEA runner for Lincheck tests
+        // Configure the IDEA runner for Lincheck and stress tests
         jvmArgs = ['--add-opens', 'java.base/jdk.internal.misc=ALL-UNNAMED',   // required for transformation
                    '--add-exports', 'java.base/jdk.internal.util=ALL-UNNAMED'] // in the model checking mode
-        systemProperty 'kotlinx.coroutines.semaphore.segmentSize', '2'
-        systemProperty 'kotlinx.coroutines.semaphore.maxSpinCycles', '1' // better for the model checking mode
+        maxHeapSize = '6g' // we need more memory for model checking
+        systemProperty 'kotlinx.coroutines.semaphore.segmentSize', '2' // better for testing in general
+        systemProperty 'kotlinx.coroutines.semaphore.maxSpinCycles', '1' // better for model checking
+        systemProperty 'kotlinx.coroutines.scheduler.keep.alive.sec', '100000' // any unpark problem hangs test
     }
-    systemProperty 'kotlinx.coroutines.scheduler.keep.alive.sec', '100000' // any unpark problem hangs test
 }
 
 jvmJar {

@@ -55,7 +55,7 @@ abstract class ChannelLincheckTestBase(
     private val c: Channel<Int>,
     private val sequentialSpecification: Class<*>
 ) : AbstractLincheckTest() {
-    @Operation
+    @Operation(promptCancellation = true)
     suspend fun send(@Param(name = "value") value: Int): Any = try {
         c.send(value)
     } catch (e: NumberedCancellationException) {
@@ -77,7 +77,7 @@ abstract class ChannelLincheckTestBase(
         e.testResult
     }
 
-    @Operation
+    @Operation(promptCancellation = true)
     suspend fun receive(): Any = try {
         c.receive()
     } catch (e: NumberedCancellationException) {
